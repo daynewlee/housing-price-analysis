@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -16,24 +17,29 @@ import java.util.Map;
 public class PythonApiClient {
 
     private final RestClient restClient;
+    private final String pythonApiUrl;
 
     public PythonApiClient(@Value("${python.api.url:http://localhost:8000}") String pythonApiUrl) {
-        this.restClient = RestClient.builder().baseUrl(pythonApiUrl).build();
+        this.pythonApiUrl = pythonApiUrl.endsWith("/") ? pythonApiUrl.substring(0, pythonApiUrl.length() - 1) : pythonApiUrl;
+        this.restClient = RestClient.builder().build();
     }
 
     /**
-     * 从 Python get latest estimated history
+     * Python api: get latest estimated history
      */
     public List<PropertyRecord> fetchLatestHistory() {
         try {
+            URI targetUri = URI.create(this.pythonApiUrl + "/api/estimates/history?page=1&page_size=25");
+
             PythonHistoryResponse response = restClient.get()
-                .uri("/api/estimates/history?page=1&page_size=25")
+                .uri(targetUri)
                 .retrieve()
                 .body(PythonHistoryResponse.class);
 
             return response != null && response.records() != null ? response.records() : Collections.emptyList();
         } catch (Exception e) {
             System.err.println("Failed to fetch history from Python API: " + e.getMessage());
+            e.printStackTrace();
             return Collections.emptyList();
         }
     }
