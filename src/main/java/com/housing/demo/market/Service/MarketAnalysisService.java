@@ -24,7 +24,7 @@ public class MarketAnalysisService {
     private final LruCache<String, List<PropertyRecord>> lruCache;
     private final ObjectMapper objectMapper;
 
-    // Feature Flag 注入，可通过环境变量 APP_MOCK_MODE=true 覆盖
+    // Feature Flag
     @Value("${app.mock-mode:false}")
     private boolean mockMode;
 
@@ -79,18 +79,19 @@ public class MarketAnalysisService {
 
     /**
      * What-If 宏观推演分析：
-     * 取 Cache 中最近的 8 套房产，结合 5 年通胀率 (3%) 与 贷款利率 (5.5%) 进行未来估值与还款推演
+     * 取 LRU Cache 中最近的最多 8 套房产，基于未来 5 年复合通胀率 (默认 3%) 与贷款利率 (默认 5.5%)
+     * 逐年计算价值演进轨迹 (2026-2031) 以及未来的按揭月供
      */
     public Map<String, Object> runWhatIfAnalysis(WhatIfRequest req) {
         // 1. 读取参数或使用默认宏观基准
         int years = (req != null && req.yearsAhead() != null && req.yearsAhead() > 0) ? req.yearsAhead() : 5;
         double inflationRate = (req != null && req.inflationRate() != null) ? req.inflationRate() : 3.0; // 3%
         double mortgageRate = (req != null && req.mortgageRate() != null) ? req.mortgageRate() : 5.5;   // 5.5%
-        String scenario = (req != null && req.scenarioName() != null && !req.scenarioName().isBlank()) 
-                            ? req.scenarioName() 
-                            : "5-Year Macroeconomic Outlook";
+        String scenario = (req != null && req.scenarioName() != null && !req.scenarioName().isBlank())
+                            ? req.scenarioName()
+                            : "5-Year Macroeconomic Trajectory";
 
-        // 2. Top 8 most recently estimated houses
+        // 2. Get top 8 most recently estimated housing prices
         List<PropertyRecord> allHistory = getCachedOrFreshHistory();
         if (allHistory.isEmpty()) {
             return Map.of(
@@ -103,33 +104,48 @@ public class MarketAnalysisService {
             .limit(8)
             .collect(Collectors.toList());
 
-        // 3. 计算 5 年复合通胀膨胀系数: (1 + r)^t
-        double appreciationFactor = Math.pow(1.0 + (inflationRate / 100.0), years);
+        // 3. 计算第 5 年的总复合通胀膨胀系数: (1 + r)^t
+        double cumulativeAppreciationFactor = Math.pow(1.0 + (inflationRate / 100.0), years);
 
-        // 4. Calculate top 8 most recently estimated houses
+        // 4. 对最多 8 套房产逐个进行未来 0~5 年的逐年轨迹推演
         List<Map<String, Object>> projectedProperties = new ArrayList<>();
         double totalBasePrice = 0.0;
         double totalFuturePrice = 0.0;
 
         for (PropertyRecord prop : top8Properties) {
             double currentPrice = prop.predictedPrice();
-            double projectedPrice = Math.round(currentPrice * appreciationFactor);
 
-            // 附带计算未来估值下的 30 年期月供 (首付 20%, 贷款 80%, 年利率 5.5%)
-            double estimatedMonthlyPayment = calculateMonthlyMortgage(projectedPrice * 0.8, mortgageRate, 30);
+            // 生成逐年价值演进点 (2026, 2027, 2028, 2029, 2030, 2031)
+            List<Map<String, Object>> trajectory = new ArrayList<>();
+            for (int t = 0; t <= years; t++) {
+                int displayYear = 2026 + t; // 基准当前年份为 2026
+                double priceAtYearT = Math.round(currentPrice * Math.pow(1.0 + (inflationRate / 100.0), t));
+                trajectory.add(Map.of(
+                    "year", displayYear,
+                    "yearOffset", t,
+                    "price", priceAtYearT
+                ));
+            }
+
+            // 第 5 年 (2031) 的推演总价
+            double projectedFinalPrice = (double) trajectory.get(years).get("price");
+
+            // 计算 30 年期等额本息月供 (按首付 20%，贷款 80%，贷款年利率 5.5% 计算)
+            double estimatedMonthlyPayment = calculateMonthlyMortgage(projectedFinalPrice * 0.8, mortgageRate, 30);
 
             totalBasePrice += currentPrice;
-            totalFuturePrice += projectedPrice;
+            totalFuturePrice += projectedFinalPrice;
 
             Map<String, Object> item = new HashMap<>();
             item.put("id", prop.id());
             item.put("propertyName", prop.propertyName());
             item.put("currentPrice", currentPrice);
-            item.put("projectedPrice", projectedPrice);
-            item.put("projectedGain", Math.round(projectedPrice - currentPrice));
+            item.put("projectedPrice", projectedFinalPrice);
+            item.put("projectedGain", Math.round(projectedFinalPrice - currentPrice));
             item.put("estimatedMonthlyMortgage", Math.round(estimatedMonthlyPayment));
             item.put("squareFootage", prop.squareFootage());
             item.put("bedrooms", prop.bedrooms());
+            item.put("trajectory", trajectory); // 供前端折线图绘制 8 根多点曲线
 
             projectedProperties.add(item);
         }
@@ -146,7 +162,7 @@ public class MarketAnalysisService {
                 "yearsAhead", years,
                 "annualInflationRate", inflationRate + "%",
                 "averageMortgageRate", mortgageRate + "%",
-                "cumulativeGrowthMultiplier", Math.round(appreciationFactor * 1000.0) / 1000.0
+                "cumulativeGrowthMultiplier", Math.round(cumulativeAppreciationFactor * 1000.0) / 1000.0
             ),
             "sampleSize", count,
             "summary", Map.of(
@@ -159,7 +175,8 @@ public class MarketAnalysisService {
     }
 
     /**
-     * M = P * [ i(1 + i)^n ] / [ (1 + i)^n – 1]
+     * 辅助公式：计算 30 年期等额本息月供 (Standard Fixed-rate Mortgage)
+     * M = P * [ i(1 + i)^n ] / [ (1 + i)^n – 1 ]
      */
     private double calculateMonthlyMortgage(double principal, double annualRatePct, int years) {
         if (principal <= 0 || annualRatePct <= 0) return 0.0;
