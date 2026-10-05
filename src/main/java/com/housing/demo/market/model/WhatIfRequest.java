@@ -1,14 +1,12 @@
-package com.housing.demo.market.model;
+package com.housing.market.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record WhatIfRequest(
     @JsonProperty("scenario_name") String scenarioName,
-    @JsonProperty("square_footage") double squareFootage,
-    int bedrooms,
-    double bathrooms,
-    @JsonProperty("year_built") int yearBuilt, // 校验 >= 2026
-    @JsonProperty("lot_size") double lotSize,
-    @JsonProperty("distance_to_city_center") double distanceToCityCenter,
-    @JsonProperty("school_rating") double schoolRating
+    @JsonProperty("years_ahead") Integer yearsAhead,         // 默认 5 年
+    @JsonProperty("inflation_rate") Double inflationRate,   // 默认 3.0 (%)
+    @JsonProperty("mortgage_rate") Double mortgageRate      // 默认 5.5 (%)
 ) {}

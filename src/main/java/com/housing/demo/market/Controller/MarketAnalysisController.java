@@ -22,7 +22,7 @@ public class MarketAnalysisController {
     }
 
     /**
-     * 1. 过滤和排序房产列表（支持 minPrice, maxPrice, minBedrooms, sortBy）
+     * 1. Filtering and sorting ( minPrice, maxPrice, minBedrooms, sortBy）
      */
     @GetMapping("/properties")
     public ResponseEntity<List<PropertyRecord>> getFilteredProperties(
@@ -51,25 +51,22 @@ public class MarketAnalysisController {
     }
 
     /**
-     * 4. What-If 推演分析接口（限定 year_built >= 2026）
+     * 4. What-If 宏观推演分析接口（未来 5 年，3% 通胀，5.5% 利率，针对 Cache 最近 8 套房）
      */
     @PostMapping("/what-if")
-    public ResponseEntity<?> analyzeWhatIf(@RequestBody WhatIfRequest request) {
-        if (request.yearBuilt() < 2026) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(Map.of("error", "Invalid Year: What-If simulation strictly requires year_built >= 2026."));
-        }
-
+    public ResponseEntity<?> analyzeWhatIf(@RequestBody(required = false) WhatIfRequest request) {
         try {
-            return ResponseEntity.ok(analysisService.runWhatIfAnalysis(request));
+            // 如果请求体为空，传入空的 DTO 自动取默认值
+            WhatIfRequest safeReq = (request != null) ? request : new WhatIfRequest(null, 5, 3.0, 5.5);
+            return ResponseEntity.ok(analysisService.runWhatIfAnalysis(safeReq));
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(Map.of("error", "Python ML service unavailable: " + e.getMessage()));
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("error", "Failed to compute what-if macro scenario: " + e.getMessage()));
         }
     }
 
     /**
-     * 5. Refresh cache (Python 端新增估价后可调用刷新）
+     * 5. Refresh cache
      */
     @PostMapping("/cache/refresh")
     public ResponseEntity<Map<String, String>> refreshCache() {

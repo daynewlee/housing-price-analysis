@@ -77,32 +77,96 @@ public class MarketAnalysisService {
         }
     }
 
+    /**
+     * What-If 宏观推演分析：
+     * 取 Cache 中最近的 8 套房产，结合 5 年通胀率 (3%) 与 贷款利率 (5.5%) 进行未来估值与还款推演
+     */
     public Map<String, Object> runWhatIfAnalysis(WhatIfRequest req) {
-        Map<String, Object> inference;
+        // 1. 读取参数或使用默认宏观基准
+        int years = (req != null && req.yearsAhead() != null && req.yearsAhead() > 0) ? req.yearsAhead() : 5;
+        double inflationRate = (req != null && req.inflationRate() != null) ? req.inflationRate() : 3.0; // 3%
+        double mortgageRate = (req != null && req.mortgageRate() != null) ? req.mortgageRate() : 5.5;   // 5.5%
+        String scenario = (req != null && req.scenarioName() != null && !req.scenarioName().isBlank()) 
+                            ? req.scenarioName() 
+                            : "5-Year Macroeconomic Outlook";
 
-        if (mockMode) { // mock mode
-            double simulatedPrice = req.squareFootage() * 200 + (req.yearBuilt() - 2000) * 1500;
-            inference = Map.of(
-                "predicted_price", Math.round(simulatedPrice),
-                "currency", "USD",
-                "simulated", true
+        // 2. Top 8 most recently estimated houses
+        List<PropertyRecord> allHistory = getCachedOrFreshHistory();
+        if (allHistory.isEmpty()) {
+            return Map.of(
+                "status", "NO_DATA",
+                "message", "No historical properties found in cache. Generate estimates first."
             );
-        } else {
-            inference = pythonApiClient.predictWhatIfPrice(req);
         }
 
-        List<PropertyRecord> data = getCachedOrFreshHistory();
-        double currentMarketAvg = data.stream()
-            .mapToDouble(PropertyRecord::predictedPrice)
-            .average()
-            .orElse(0.0);
+        List<PropertyRecord> top8Properties = allHistory.stream()
+            .limit(8)
+            .collect(Collectors.toList());
 
+        // 3. 计算 5 年复合通胀膨胀系数: (1 + r)^t
+        double appreciationFactor = Math.pow(1.0 + (inflationRate / 100.0), years);
+
+        // 4. Calculate top 8 most recently estimated houses
+        List<Map<String, Object>> projectedProperties = new ArrayList<>();
+        double totalBasePrice = 0.0;
+        double totalFuturePrice = 0.0;
+
+        for (PropertyRecord prop : top8Properties) {
+            double currentPrice = prop.predictedPrice();
+            double projectedPrice = Math.round(currentPrice * appreciationFactor);
+
+            // 附带计算未来估值下的 30 年期月供 (首付 20%, 贷款 80%, 年利率 5.5%)
+            double estimatedMonthlyPayment = calculateMonthlyMortgage(projectedPrice * 0.8, mortgageRate, 30);
+
+            totalBasePrice += currentPrice;
+            totalFuturePrice += projectedPrice;
+
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", prop.id());
+            item.put("propertyName", prop.propertyName());
+            item.put("currentPrice", currentPrice);
+            item.put("projectedPrice", projectedPrice);
+            item.put("projectedGain", Math.round(projectedPrice - currentPrice));
+            item.put("estimatedMonthlyMortgage", Math.round(estimatedMonthlyPayment));
+            item.put("squareFootage", prop.squareFootage());
+            item.put("bedrooms", prop.bedrooms());
+
+            projectedProperties.add(item);
+        }
+
+        int count = top8Properties.size();
+        double avgCurrentPrice = Math.round(totalBasePrice / count);
+        double avgFuturePrice = Math.round(totalFuturePrice / count);
+
+        // 5. 组合推演综合响应
         return Map.of(
-            "scenario", req.scenarioName() != null ? req.scenarioName() : "Future Projection",
-            "projectedYear", req.yearBuilt(),
-            "modelInference", inference,
-            "marketBaselineAverage", Math.round(currentMarketAvg)
+            "status", "SUCCESS",
+            "scenario", scenario,
+            "macroAssumptions", Map.of(
+                "yearsAhead", years,
+                "annualInflationRate", inflationRate + "%",
+                "averageMortgageRate", mortgageRate + "%",
+                "cumulativeGrowthMultiplier", Math.round(appreciationFactor * 1000.0) / 1000.0
+            ),
+            "sampleSize", count,
+            "summary", Map.of(
+                "avgCurrentPrice", avgCurrentPrice,
+                "avgProjectedPrice", avgFuturePrice,
+                "overallAppreciationPct", Math.round(((avgFuturePrice - avgCurrentPrice) / avgCurrentPrice) * 1000.0) / 10.0 + "%"
+            ),
+            "projections", projectedProperties
         );
+    }
+
+    /**
+     * M = P * [ i(1 + i)^n ] / [ (1 + i)^n – 1]
+     */
+    private double calculateMonthlyMortgage(double principal, double annualRatePct, int years) {
+        if (principal <= 0 || annualRatePct <= 0) return 0.0;
+        double monthlyRate = (annualRatePct / 100.0) / 12.0;
+        int totalMonths = years * 12;
+        double factor = Math.pow(1.0 + monthlyRate, totalMonths);
+        return (principal * monthlyRate * factor) / (factor - 1.0);
     }
 
     public List<PropertyRecord> filterAndSort(Double minPrice, Double maxPrice, Integer minBedrooms, String sortBy) {
