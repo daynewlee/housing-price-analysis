@@ -1,4 +1,4 @@
-package com.housing.market.model;
+package com.housing.demo.market.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
