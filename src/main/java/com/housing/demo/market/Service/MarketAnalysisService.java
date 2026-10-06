@@ -127,7 +127,7 @@ public class MarketAnalysisService {
                 ));
             }
 
-            // 第 5 年 (2031) 的推演总价
+            // Predict "what-if" price
             double projectedFinalPrice = (double) trajectory.get(years).get("price");
 
             // 计算 30 年期等额本息月供 (按首付 20%，贷款 80%，贷款年利率 5.5% 计算)
@@ -175,7 +175,6 @@ public class MarketAnalysisService {
     }
 
     /**
-     * 辅助公式：计算 30 年期等额本息月供 (Standard Fixed-rate Mortgage)
      * M = P * [ i(1 + i)^n ] / [ (1 + i)^n – 1 ]
      */
     private double calculateMonthlyMortgage(double principal, double annualRatePct, int years) {
